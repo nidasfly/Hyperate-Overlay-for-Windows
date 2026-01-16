@@ -2,8 +2,8 @@
 # HypeRate Overlay for Windows                                      #
 # This Python Script is 100% created by Gemini                      #
 # Github: https://github.com/nidasfly/Hyperate-Overlay-for-Windows  #
+# 官网 (HyperRateOverlay Web): https://clipshar.ing/hyperateoverlay  #
 # ----------------------------------------------------------------- #
-
 
 import tkinter as tk
 from tkinter import simpledialog, messagebox
@@ -51,7 +51,10 @@ class HeartRateApp:
         self.current_hr = "--"
         self.running = True
         self.ws_url = None
-        self.click_through = False 
+        
+        # 【修改点 1】从配置加载穿透状态，如果没有则默认为 False
+        self.click_through = self.config.get("click_through", False)
+        
         self.tray_icon = None
 
         self.setup_window()
@@ -103,13 +106,20 @@ class HeartRateApp:
             try:
                 with open(self.config_path, "r") as f: return json.load(f)
             except: pass
-        return {"short_id": "", "x": None, "y": None}
+        # 【修改点 2】默认增加 click_through 字段
+        return {"short_id": "", "x": None, "y": None, "click_through": False}
 
     def save_config(self):
         try:
             x = self.root.winfo_x()
             y = self.root.winfo_y()
-            data = {"short_id": self.config.get("short_id"), "x": x, "y": y}
+            # 【修改点 3】保存时写入当前 click_through 状态
+            data = {
+                "short_id": self.config.get("short_id"), 
+                "x": x, 
+                "y": y,
+                "click_through": self.click_through
+            }
             with open(self.config_path, "w") as f: json.dump(data, f)
         except: pass
 
@@ -144,10 +154,25 @@ class HeartRateApp:
         self.root.update_idletasks()
         hwnd = windll.user32.GetParent(self.root.winfo_id())
         if hwnd == 0: hwnd = self.root.winfo_id()
-        style = windll.user32.GetWindowLongW(hwnd, -20) # GWL_EXSTYLE
-        # Remove APPWINDOW, Add TOOLWINDOW
-        style = (style & ~0x00040000) | 0x00000080 
-        windll.user32.SetWindowLongW(hwnd, -20, style)
+        
+        GWL_EXSTYLE = -20
+        WS_EX_TOOLWINDOW = 0x00000080
+        WS_EX_APPWINDOW = 0x00040000
+        WS_EX_LAYERED = 0x80000
+        WS_EX_TRANSPARENT = 0x20
+
+        # 获取当前样式
+        style = windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        
+        # 基础操作：移除APPWINDOW，添加TOOLWINDOW (隐藏任务栏)
+        style = (style & ~WS_EX_APPWINDOW) | WS_EX_TOOLWINDOW
+        
+        # 【修改点 4】如果在配置中开启了穿透，初始化时直接应用穿透样式
+        if self.click_through:
+            style = style | WS_EX_LAYERED | WS_EX_TRANSPARENT
+            self.root.wm_attributes("-alpha", 0.7) # 视觉提示：变透明
+        
+        windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
 
     def setup_ui(self):
         self.label = tk.Label(self.root, text="Waiting...", font=("Segoe UI", 20, "bold"), fg="white", bg=BG_COLOR)
@@ -181,6 +206,8 @@ class HeartRateApp:
 
     def init_tray_icon(self):
         menu = pystray.Menu(
+            pystray.MenuItem("官网 (HyperateOverlay Web)", lambda icon, item: os.startfile("https://clipshar.ing/hyperateoverlay")),
+            pystray.MenuItem("GitHub", lambda icon, item: os.startfile("https://github.com/nidasfly/Hyperate-Overlay-for-Windows")),
             # 穿透开关 (带 √)
             pystray.MenuItem("锁定穿透 (Click-through)", self.toggle_click_through_action, checked=lambda i: self.click_through),
             # 开机自启开关 (带 √)
@@ -191,7 +218,7 @@ class HeartRateApp:
         self.tray_icon = pystray.Icon("HypeRateOverlay", self.create_tray_image(), "HypeRate Overlay", menu)
         self.tray_icon.run()
 
-    # --- 穿透逻辑 (你的代码) ---
+    # --- 穿透逻辑 ---
     def toggle_click_through_action(self, icon, item):
         self.click_through = not self.click_through
         
@@ -218,6 +245,9 @@ class HeartRateApp:
             windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
             self.root.after(0, lambda: self.root.wm_attributes("-alpha", 1.0))
             print("穿透模式：关闭")
+            
+        # 【修改点 5】切换状态后立即保存到配置文件
+        self.save_config()
 
     # --- 开机自启逻辑 ---
     def get_exe_path(self):
