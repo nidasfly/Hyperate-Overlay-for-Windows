@@ -268,36 +268,93 @@ class HeartRateApp:
 
     # --- 网络 ---
     def get_token_automatically(self):
+        """
+        自动获取 Token (支持 Chrome 和 Edge 双内核)
+        """
         from selenium import webdriver
-        from selenium.webdriver.chrome.service import Service
-        from selenium.webdriver.chrome.options import Options
+        # Chrome 依赖
+        from selenium.webdriver.chrome.service import Service as ChromeService
+        from selenium.webdriver.chrome.options import Options as ChromeOptions
         from webdriver_manager.chrome import ChromeDriverManager
-        
+        # Edge 依赖
+        from selenium.webdriver.edge.service import Service as EdgeService
+        from selenium.webdriver.edge.options import Options as EdgeOptions
+        from webdriver_manager.microsoft import EdgeChromiumDriverManager
+
         self.root.after(0, lambda: self.label.config(text="Linking..."))
-        options = Options()
-        options.add_argument('--headless=new')
-        options.add_argument('--disable-gpu')
-        options.add_argument('--ignore-certificate-errors')
-        options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
         
-        driver = None; found_url = None; cid = self.config.get("short_id")
+        driver = None
+        found_url = None
+        current_id = self.config.get("short_id")
+
+        # --- 内部函数：尝试启动浏览器 ---
+        def try_browser(browser_type):
+            nonlocal driver
+            try:
+                if browser_type == "chrome":
+                    options = ChromeOptions()
+                    # 关键配置
+                    options.add_argument('--headless=new') 
+                    options.add_argument('--disable-gpu')
+                    options.add_argument('--ignore-certificate-errors')
+                    options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
+                    
+                    service = ChromeService(ChromeDriverManager().install())
+                    driver = webdriver.Chrome(service=service, options=options)
+                    print(">>> 使用 Chrome 浏览器")
+                    
+                elif browser_type == "edge":
+                    options = EdgeOptions()
+                    options.add_argument('--headless=new')
+                    options.add_argument('--disable-gpu')
+                    options.add_argument('--ignore-certificate-errors')
+                    options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
+                    
+                    service = EdgeService(EdgeChromiumDriverManager().install())
+                    driver = webdriver.Edge(service=service, options=options)
+                    print(">>> 使用 Edge 浏览器 (Chrome 未找到)")
+                
+                return True
+            except Exception as e:
+                print(f"{browser_type} 启动失败: {e}")
+                return False
+
+        # --- 1. 优先尝试 Chrome ---
+        if not try_browser("chrome"):
+            # --- 2. 如果失败，尝试 Edge ---
+            if not try_browser("edge"):
+                print("❌ 所有浏览器均启动失败")
+                self.root.after(0, lambda: self.label.config(text="Browser Chrome/Edge Not Found", font=("Segoe UI", 20)))
+                return None
+
+        # --- 3. 统一的抓包逻辑 (Chrome 和 Edge 通用) ---
         try:
-            service = Service(ChromeDriverManager().install())
-            driver = webdriver.Chrome(service=service, options=options)
+            # 开启网络监听
             driver.execute_cdp_cmd('Network.enable', {})
-            driver.get(f"https://app.hyperate.io/{cid}")
+            
+            # 访问网页
+            target_url = f"https://app.hyperate.io/{current_id}"
+            driver.get(target_url)
+            
             pat = re.compile(r'(wss://app\.hyperate\.io/socket/websocket\?token=[a-zA-Z0-9_\-]+)')
-            st = time.time()
-            while time.time() - st < 30:
+            start_time = time.time()
+            
+            while time.time() - start_time < 30:
                 logs = str(driver.get_log('performance'))
                 match = pat.search(logs)
                 if match:
-                    found_url = match.group(1) + ("&vsn=2.0.0" if "vsn=2.0.0" not in match.group(1) else "")
+                    found_url = match.group(1)
+                    if "vsn=2.0.0" not in found_url: 
+                        found_url += "&vsn=2.0.0"
                     break
                 time.sleep(0.5)
-        except: pass
-        finally: 
-            if driver: driver.quit()
+        except Exception as e:
+            print(f"抓包过程出错: {e}")
+        finally:
+            if driver: 
+                try: driver.quit()
+                except: pass
+                
         return found_url
 
     def connect_websocket(self, url):
